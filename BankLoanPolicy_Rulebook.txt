@@ -1,0 +1,98 @@
+===============================
+SYNTHETIC BANK LOAN POLICY GUIDE
+Version: 1.0
+===============================
+
+1. INTRODUCTION
+This document outlines the synthetic loan approval policies used for training and testing AI systems. These rules are not based on any real financial institution.
+
+--------------------------------------------------
+
+2. LOAN TYPES
+
+2.1 Personal Loan
+- Purpose: Medical expenses, travel, education, emergencies
+- Loan Amount: $1,000 – $50,000
+- Tenure: 1 – 5 years
+
+2.2 Mortgage Loan
+- Purpose: Purchase or refinance residential property
+- Loan Amount: $50,000 – $1,000,000
+- Tenure: 10 – 30 years
+
+2.3 Auto Loan
+- Purpose: Purchase of new or used vehicles
+- Loan Amount: $5,000 – $100,000
+- Tenure: 2 – 7 years
+
+--------------------------------------------------
+
+3. HARD HURDLES (MANDATORY CRITERIA)
+
+The applicant must satisfy ALL of the following:
+
+- Minimum credit score: 650
+- No record of bankruptcy in the last 5 years
+- Applicant must be at least 21 years old
+- Must have a stable source of income
+- No ongoing loan defaults
+
+If any of the above conditions are not met, the loan must be automatically rejected.
+
+--------------------------------------------------
+
+4. SOFT HURDLES (PREFERRED CRITERIA)
+
+These factors influence approval likelihood and loan terms:
+
+- Debt-to-Income (DTI) Ratio should be under 40%
+- Employment stability of at least 12 months preferred
+- Higher credit score (>700) increases approval chances
+- Savings or asset ownership improves applicant profile
+- Existing relationship with the bank is a positive factor
+
+Applications not meeting these criteria may still be approved with stricter terms.
+
+--------------------------------------------------
+
+5. DOCUMENT CHECKLIST
+
+Applicants must provide the following documents:
+
+5.1 Identity Proof (any one)
+- Passport
+- Driver’s License
+- National ID Card
+
+5.2 Income Proof
+- Last 3 months' pay stubs
+- Latest tax return (1–2 years)
+- Bank statements (last 6 months)
+
+5.3 Address Proof
+- Utility bills
+- Rental agreement
+- Government-issued ID with address
+
+5.4 Loan-Specific Documents
+
+For Mortgage Loans:
+- Property documents
+- Sale agreement
+
+For Auto Loans:
+- Vehicle quotation/invoice
+- Insurance details
+
+--------------------------------------------------
+
+6. DECISION RULE SUMMARY
+
+- Reject if any hard hurdle fails
+- Approve if all hard hurdles pass and most soft hurdles are met
+- Conditional approval if soft hurdles are partially met
+
+--------------------------------------------------
+
+END OF DOCUMENT
+===============================
