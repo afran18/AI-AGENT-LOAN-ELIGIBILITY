@@ -1,120 +1,136 @@
+import json
 from typing import Literal
-import operator
-from langchain_core.messages import HumanMessage, SystemMessage, BaseMessage
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langgraph.prebuilt import ToolNode
 from langgraph.graph import StateGraph, END
 
-# Import from your existing files
+
+# Import shared components
 from config import llm
 from state import AgentState
 from tools import loan_agent_tools
+from schema import LoanVerdict
 
-# 1. Helper to create an agent node
-def create_agent(llm, tools, system_prompt: str, name: str):
-    """Encapsulates the agent logic and ensures it tags its name in the output."""
-    llm_with_tools = llm.bind_tools(tools)
+# --- 1. Node Definitions ---
+
+def advocate_node(state: AgentState):
+    """Fetches customer data and summarizes the profile."""
+    # Bind tools to the LLM
+    llm_with_tools = llm.bind_tools(loan_agent_tools)
+    prompt = """You are the Customer Advocate. 
+    Use 'get_customer_profile' to fetch the applicant's data.
+    Summarize their financial health clearly for the Policy Analyst."""
     
-    def agent_node(state: AgentState):
-        result = llm_with_tools.invoke([SystemMessage(content=system_prompt)] + state["messages"])
-        # We overwrite the name so the router knows who just spoke
-        result.name = name
-        return {"messages": [result]}
+    result = llm_with_tools.invoke([SystemMessage(content=prompt)] + state["messages"])
+    result.name = "Customer_Advocate"
+    return {"messages": [result]}
+
+def policy_analyst_node(state: AgentState):
+    """Queries the policy documents and performs the comparison logic."""
+    llm_with_tools = llm.bind_tools(loan_agent_tools)
     
-    return agent_node
+    # We provide the Analyst with a strict reasoning prompt
+    prompt = """You are the Senior Policy Analyst. 
+    1. Use 'policy_search' to find the rules for the requested loan type.
+    2. Compare the Advocate's summary against these rules.
+    3. If you have all the info, provide a detailed final analysis.
+    
+    IMPORTANT: Once you have the rules and the data, provide your final response."""
+    
+    result = llm_with_tools.invoke([SystemMessage(content=prompt)] + state["messages"])
+    result.name = "Policy_Analyst"
+    return {"messages": [result]}
 
-# 2. System Prompts
-POLICY_ANALYST_PROMPT = """You are the Bank's Senior Policy Analyst. 
-Your goal is to provide a FINAL VERDICT on the loan.
+def verdict_node(state: AgentState):
+    """The final 'structured' node that converts reasoning into Pydantic JSON."""
+    structured_llm = llm.with_structured_output(LoanVerdict)
+    
+    prompt = "Review the conversation and output the final loan decision in structured JSON format."
+    
+    # This invokes the LLM to fill our Pydantic LoanVerdict model
+    result = structured_llm.invoke([SystemMessage(content=prompt)] + state["messages"])
+    
+    # We save the Pydantic model as a JSON string so FastAPI can parse it easily
+    res_msg = HumanMessage(content=result.model_dump_json(), name="Verdict_Writer")
+    return {"messages": [res_msg]}
 
-MANDATORY WORKFLOW:
-1. Immediately use 'policy_search' to find the specific rules for the loan type mentioned (e.g., 'Auto Loan').
-2. Compare the Customer Advocate's summary against these rules.
-3. Be strict. If a document like 'Utility Bill' is required by policy but not in the profile, flag it.
-4. End your response with a clear 'VERDICT: APPROVED/REJECTED/PENDING' and a summary.
+# --- 2. Routing Logic ---
 
-DO NOT ask for permission to continue. You are the final stage of the process."""
-
-CUSTOMER_ADVOCATE_PROMPT = """You are the Customer Advocate.
-Your job is to use 'get_customer_profile' to fetch the applicant's data using the current_customer_id.
-Summarize the profile clearly so the Policy Analyst can evaluate it."""
-
-# 3. Creating the Nodes
-# We add names to the agents to make routing easier
-policy_member = create_agent(llm, loan_agent_tools, POLICY_ANALYST_PROMPT, name="Policy_Analyst")
-advocate_member = create_agent(llm, loan_agent_tools, CUSTOMER_ADVOCATE_PROMPT, name="Customer_Advocate")
-tool_node = ToolNode(loan_agent_tools)
-
-# 4. Routing Logic
-def should_continue(state: AgentState) -> Literal["tools", "policy_analyst", "__end__"]:
+def should_continue(state: AgentState) -> Literal["tools", "policy_analyst", "verdict_writer", "__end__"]:
     messages = state["messages"]
     last_message = messages[-1]
     
-    if last_message.tool_calls:
+    # 1. Check if the last message is an AI Message AND has tool calls
+    if isinstance(last_message, AIMessage) and last_message.tool_calls:
         return "tools"
     
-    # If the last message was from the Advocate, ALWAYS go to Analyst
-    if getattr(last_message, "name", None) == "Customer_Advocate":
-        return "policy_analyst"
+    # 2. Use getattr with a default of None to safely check the name
+    agent_name = getattr(last_message, "name", None)
 
-    # If the Analyst has finished their thought (and didn't call a tool), we end
-    if getattr(last_message, "name", None) == "Policy_Analyst":
-        return "__end__"
+    if agent_name == "Customer_Advocate":
+        return "policy_analyst"
+    
+    if agent_name == "Policy_Analyst":
+        return "verdict_writer"
     
     return "__end__"
 
-# 5. Build the Graph
+def route_tools(state: AgentState):
+    """Routes tool results back to the agent that called them."""
+    messages = state["messages"]
+    # We look back through history to find which AI agent initiated the call
+    for msg in reversed(messages):
+        # We check if it's an AIMessage and has a name attribute
+        msg_name = getattr(msg, "name", None)
+        if msg_name in ["Customer_Advocate", "Policy_Analyst"]:
+            return msg_name.lower()
+    
+    return "customer_advocate"
+
+# --- 3. Graph Construction ---
+
 workflow = StateGraph(AgentState)
 
-workflow.add_node("customer_advocate", advocate_member)
-workflow.add_node("policy_analyst", policy_member)
-workflow.add_node("tools", tool_node)
+workflow.add_node("customer_advocate", advocate_node)
+workflow.add_node("policy_analyst", policy_analyst_node)
+workflow.add_node("verdict_writer", verdict_node)
+workflow.add_node("tools", ToolNode(loan_agent_tools))
 
-# Entry Point
 workflow.set_entry_point("customer_advocate")
 
-# Conditional Edges
 workflow.add_conditional_edges("customer_advocate", should_continue)
 workflow.add_conditional_edges("policy_analyst", should_continue)
+workflow.add_conditional_edges("tools", route_tools)
+workflow.add_edge("verdict_writer", END)
 
-# Standard Edges: Tools always return to the 'router' or specific node
-# In this design, tools will return to the advocate initially, 
-# then the advocate will pass to analyst once data is ready.
-workflow.add_edge("tools", "customer_advocate")
-
-# 6. Compile
 app = workflow.compile()
 
-# 7. Execution Loop
+# --- 4. Execution Loop (CLI Test) ---
+
 def run_loan_assessment(customer_id: str):
     initial_input = {
-        "messages": [
-            HumanMessage(content=(
-                f"Assess loan application for customer {customer_id}. "
-                "1. Advocate retrieves profile. "
-                "2. Analyst verifies rules. "
-                "3. Provide final eligibility verdict."
-            ))
-        ],
-        "current_customer_id": customer_id,
-        "analysis_complete": False
+        "messages": [HumanMessage(content=f"Full assessment for {customer_id}")],
+        "current_customer_id": customer_id
     }
 
-    print(f"\n{'='*60}")
-    print(f"STARTING MULTI-AGENT ASSESSMENT: {customer_id}")
-    print(f"{'='*60}")
+    print(f"\nProcessing: {customer_id}")
+    final_output = None
 
     for event in app.stream(initial_input):
         for node, values in event.items():
             if "messages" in values:
                 last_msg = values["messages"][-1]
-                agent_name = getattr(last_msg, "name", node).upper()
-                print(f"\n[NODE: {agent_name}]")
-                print(last_msg.content if last_msg.content else f"Calling tools: {last_msg.tool_calls}")
+                name = getattr(last_msg, "name", node).upper()
+                
+                # If it's the final verdict node, parse the JSON for the CLI display
+                if name == "VERDICT_WRITER":
+                    final_output = json.loads(last_msg.content)
+                    print(f"\n[{name}] -> DECISION: {final_output['decision']}")
+                else:
+                    print(f"\n[{name}]")
+                    print(last_msg.content[:200] + "..." if last_msg.content else "Calling tools...")
 
-    print(f"\n{'='*60}")
-    print("ASSESSMENT COMPLETE")
-    print(f"{'='*60}\n")
+    return final_output
 
 if __name__ == "__main__":
-    # Test with a potentially tricky case
     run_loan_assessment("P003")
