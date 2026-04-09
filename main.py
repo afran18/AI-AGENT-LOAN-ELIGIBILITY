@@ -1,4 +1,5 @@
 import json
+import sys
 from typing import Literal
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langgraph.prebuilt import ToolNode
@@ -54,25 +55,27 @@ def verdict_node(state: AgentState):
     res_msg = HumanMessage(content=result.model_dump_json(), name="Verdict_Writer")
     return {"messages": [res_msg]}
 
+
 # --- 2. Routing Logic ---
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, ToolMessage
+
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, ToolMessage
 
 def should_continue(state: AgentState) -> Literal["tools", "policy_analyst", "verdict_writer", "__end__"]:
     messages = state["messages"]
     last_message = messages[-1]
-    
-    # 1. Check if the last message is an AI Message AND has tool calls
-    if isinstance(last_message, AIMessage) and last_message.tool_calls:
-        return "tools"
-    
-    # 2. Use getattr with a default of None to safely check the name
-    agent_name = getattr(last_message, "name", None)
 
-    if agent_name == "Customer_Advocate":
-        return "policy_analyst"
-    
-    if agent_name == "Policy_Analyst":
-        return "verdict_writer"
-    
+    # Only AIMessage can have tool_calls — gate everything inside this check
+    if isinstance(last_message, AIMessage):
+        if last_message.tool_calls:
+            return "tools"
+        
+        agent_name = getattr(last_message, "name", None)
+        if agent_name == "Customer_Advocate":
+            return "policy_analyst"
+        if agent_name == "Policy_Analyst":
+            return "verdict_writer"
+
     return "__end__"
 
 def route_tools(state: AgentState):
@@ -133,4 +136,5 @@ def run_loan_assessment(customer_id: str):
     return final_output
 
 if __name__ == "__main__":
-    run_loan_assessment("P003")
+    customer_id = sys.argv[1] if len(sys.argv) > 1 else "P003"
+    run_loan_assessment(customer_id)
